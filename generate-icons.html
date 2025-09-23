@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Icon Generator</title>
+</head>
+<body>
+    <canvas id="canvas" width="512" height="512" style="border: 1px solid #ccc;"></canvas>
+    <div>
+        <button onclick="generateIcon(72)">72x72</button>
+        <button onclick="generateIcon(96)">96x96</button>
+        <button onclick="generateIcon(128)">128x128</button>
+        <button onclick="generateIcon(144)">144x144</button>
+        <button onclick="generateIcon(152)">152x152</button>
+        <button onclick="generateIcon(192)">192x192</button>
+        <button onclick="generateIcon(384)">384x384</button>
+        <button onclick="generateIcon(512)">512x512</button>
+    </div>
+
+    <script>
+        function generateIcon(size) {
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Set canvas size
+            canvas.width = size;
+            canvas.height = size;
+            
+            // Clear canvas
+            ctx.fillStyle = '#2563eb';
+            ctx.fillRect(0, 0, size, size);
+            
+            // Draw a simple travel/location icon
+            ctx.fillStyle = '#ffffff';
+            ctx.font = `${size * 0.6}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('🧭', size/2, size/2);
+            
+            // Download the image
+            const link = document.createElement('a');
+            link.download = `icon-${size}x${size}.png`;
+            link.href = canvas.toDataURL();
+            link.click();
+        }
+    </script>
+</body>
+</html>
