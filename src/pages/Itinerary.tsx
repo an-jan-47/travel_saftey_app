@@ -507,7 +507,7 @@ const DestinationManager = ({
   );
 };
 
-export const Itinerary = () => {
+const Itinerary = () => {
   const [itineraries, setItineraries] = useState<ItineraryWithDestinations[]>([]);
   const [selectedItinerary, setSelectedItinerary] = useState<ItineraryWithDestinations | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -515,8 +515,13 @@ export const Itinerary = () => {
   const [newItinerary, setNewItinerary] = useState({
     start_date: '',
     end_date: '',
-    notes: ''
+    notes: '',
+    title: '',
+    destinations: [] as Destination[]
   });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<PlaceSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   const itineraryService = ItineraryService.getInstance();
 
@@ -556,16 +561,77 @@ export const Itinerary = () => {
 
     const created = await itineraryService.createItinerary({
       ...newItinerary,
-      destinations: [],
+      destinations: newItinerary.destinations,
       status: 'active'
     });
 
     if (created) {
       await loadItineraries();
       setIsCreatingItinerary(false);
-      setNewItinerary({ start_date: '', end_date: '', notes: '' });
+      setNewItinerary({ 
+        start_date: '', 
+        end_date: '', 
+        notes: '', 
+        title: '', 
+        destinations: [] 
+      });
+      setSearchQuery('');
+      setSearchResults([]);
       setSelectedItinerary(created);
     }
+  };
+
+  // Search destinations for itinerary creation
+  const searchDestinations = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const results = await itineraryService.searchPlaces(query);
+      setSearchResults(results);
+    } catch (error) {
+      console.error('Search error:', error);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // Add destination to new itinerary
+  const addDestinationToNewItinerary = (place: PlaceSearchResult) => {
+    const newDestination: Destination = {
+      id: `temp_${Date.now()}`,
+      itinerary_id: '',
+      tourist_id: localStorage.getItem('tourist_id') || '',
+      name: place.name,
+      address: place.address,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      visit_date: new Date().toISOString().split('T')[0],
+      visit_time: '09:00',
+      status: 'pending',
+      notes: '',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    setNewItinerary(prev => ({
+      ...prev,
+      destinations: [...prev.destinations, newDestination]
+    }));
+    setSearchQuery('');
+    setSearchResults([]);
+  };
+
+  // Remove destination from new itinerary
+  const removeDestinationFromNewItinerary = (destinationId: string) => {
+    setNewItinerary(prev => ({
+      ...prev,
+      destinations: prev.destinations.filter(d => d.id !== destinationId)
+    }));
   };
 
   const refreshSelectedItinerary = async () => {
@@ -579,13 +645,13 @@ export const Itinerary = () => {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="max-w-6xl mx-auto">
+    <div className="container mx-auto px-4 py-4 md:py-8">
+      <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold">Travel Itinerary</h1>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-sm">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 md:mb-8">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold">Travel Itinerary</h1>
+            <div className="flex items-center gap-2 text-sm mt-2">
               {isOnline ? (
                 <>
                   <Wifi className="h-4 w-4 text-green-500" />
@@ -598,11 +664,14 @@ export const Itinerary = () => {
                 </>
               )}
             </div>
-            <Button onClick={() => setIsCreatingItinerary(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              New Itinerary
-            </Button>
           </div>
+          <Button 
+            onClick={() => setIsCreatingItinerary(true)}
+            className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            New Itinerary
+          </Button>
         </div>
 
         {/* Create New Itinerary Dialog */}
@@ -611,10 +680,21 @@ export const Itinerary = () => {
             <CardHeader>
               <CardTitle>Create New Itinerary</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+            <CardContent className="space-y-6">
+              {/* Title Field */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Itinerary Title</label>
+                <Input
+                  placeholder="e.g., Tokyo Adventure, Europe Tour..."
+                  value={newItinerary.title}
+                  onChange={(e) => setNewItinerary(prev => ({ ...prev, title: e.target.value }))}
+                />
+              </div>
+
+              {/* Date Fields */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm font-medium">Start Date</label>
+                  <label className="text-sm font-medium mb-2 block">Start Date</label>
                   <Input
                     type="date"
                     value={newItinerary.start_date}
@@ -622,7 +702,7 @@ export const Itinerary = () => {
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium">End Date</label>
+                  <label className="text-sm font-medium mb-2 block">End Date</label>
                   <Input
                     type="date"
                     value={newItinerary.end_date}
@@ -630,18 +710,105 @@ export const Itinerary = () => {
                   />
                 </div>
               </div>
+
+              {/* Destination Search */}
               <div>
-                <label className="text-sm font-medium">Notes</label>
+                <label className="text-sm font-medium mb-2 block">Add Destinations (Optional)</label>
+                <div className="relative">
+                  <Input
+                    placeholder="Search for places to visit..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      searchDestinations(e.target.value);
+                    }}
+                  />
+                  {isSearching && (
+                    <div className="absolute right-3 top-3">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Search Results */}
+                {searchResults.length > 0 && (
+                  <div className="mt-2 border rounded-lg max-h-48 overflow-y-auto bg-white dark:bg-gray-800">
+                    {searchResults.map((place, index) => (
+                      <button
+                        key={index}
+                        onClick={() => addDestinationToNewItinerary(place)}
+                        className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-200 dark:border-gray-600 last:border-b-0"
+                      >
+                        <div className="font-medium text-sm">{place.name}</div>
+                        <div className="text-xs text-gray-500 mt-1">{place.address}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Added Destinations List */}
+              {newItinerary.destinations.length > 0 && (
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Added Destinations</label>
+                  <div className="space-y-2">
+                    {newItinerary.destinations.map((destination) => (
+                      <div key={destination.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                        <div className="flex-1">
+                          <div className="font-medium text-sm">{destination.name}</div>
+                          <div className="text-xs text-gray-500 mt-1">{destination.address}</div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeDestinationFromNewItinerary(destination.id)}
+                          className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Notes Field */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Notes</label>
                 <Textarea
-                  placeholder="Trip notes..."
+                  placeholder="Trip notes, preferences, important information..."
                   value={newItinerary.notes}
                   onChange={(e) => setNewItinerary(prev => ({ ...prev, notes: e.target.value }))}
+                  rows={3}
                 />
               </div>
-              <div className="flex gap-2">
-                <Button onClick={createItinerary}>Create Itinerary</Button>
-                <Button variant="outline" onClick={() => setIsCreatingItinerary(false)}>
+
+              {/* Action Buttons */}
+              <div className="flex flex-col-reverse sm:flex-row gap-3 pt-4">
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setIsCreatingItinerary(false);
+                    setNewItinerary({ 
+                      start_date: '', 
+                      end_date: '', 
+                      notes: '', 
+                      title: '', 
+                      destinations: [] 
+                    });
+                    setSearchQuery('');
+                    setSearchResults([]);
+                  }}
+                  className="w-full sm:w-auto"
+                >
                   Cancel
+                </Button>
+                <Button 
+                  onClick={createItinerary}
+                  disabled={!newItinerary.start_date || !newItinerary.end_date}
+                  className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700"
+                >
+                  Create Itinerary
                 </Button>
               </div>
             </CardContent>
@@ -651,45 +818,57 @@ export const Itinerary = () => {
         {/* Main Content */}
         {itineraries.length === 0 ? (
           <Card>
-            <CardContent className="p-12 text-center">
+            <CardContent className="p-8 md:p-12 text-center">
               <MapIcon className="h-12 w-12 mx-auto mb-4 text-gray-400" />
               <h3 className="text-xl font-semibold mb-2">No Itineraries Yet</h3>
-              <p className="text-gray-600 mb-4">Create your first travel itinerary to get started.</p>
-              <Button onClick={() => setIsCreatingItinerary(true)}>
+              <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                Create your first travel itinerary to get started with planning your adventures.
+              </p>
+              <Button 
+                onClick={() => setIsCreatingItinerary(true)}
+                className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700"
+              >
                 <Plus className="h-4 w-4 mr-2" />
                 Create Your First Itinerary
               </Button>
             </CardContent>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+          <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 lg:gap-8">
             {/* Itinerary Sidebar */}
-            <div className="lg:col-span-1">
-              <Card>
+            <div className="xl:col-span-1 order-2 xl:order-1">
+              <Card className="h-fit">
                 <CardHeader>
-                  <CardTitle>Your Itineraries</CardTitle>
+                  <CardTitle className="text-lg">Your Itineraries</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2">
+                <CardContent className="space-y-3 max-h-96 xl:max-h-[600px] overflow-y-auto">
                   {itineraries.map((itinerary) => (
                     <div
                       key={itinerary.id}
-                      className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                      className={`p-3 rounded-lg border cursor-pointer transition-all duration-200 ${
                         selectedItinerary?.id === itinerary.id 
-                          ? 'border-blue-500 bg-blue-50' 
-                          : 'border-gray-200 hover:border-gray-300'
+                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-sm' 
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:hover:border-gray-600 dark:hover:bg-gray-800'
                       }`}
                       onClick={() => setSelectedItinerary(itinerary)}
                     >
-                      <div className="font-medium">
-                        {new Date(itinerary.start_date).toLocaleDateString()} - {' '}
-                        {new Date(itinerary.end_date).toLocaleDateString()}
+                      <div className="space-y-2">
+                        <div className="font-medium text-sm md:text-base line-clamp-1">
+                          {itinerary.title || `Trip ${new Date(itinerary.start_date).toLocaleDateString()}`}
+                        </div>
+                        <div className="text-xs md:text-sm text-gray-600">
+                          {new Date(itinerary.start_date).toLocaleDateString()} - {' '}
+                          {new Date(itinerary.end_date).toLocaleDateString()}
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-500">
+                            {itinerary.destination_details?.length || 0} destinations
+                          </span>
+                          <Badge variant="outline" className="text-xs">
+                            {itinerary.status}
+                          </Badge>
+                        </div>
                       </div>
-                      <div className="text-sm text-gray-600">
-                        {itinerary.destination_details?.length || 0} destinations
-                      </div>
-                      <Badge variant="outline" className="text-xs">
-                        {itinerary.status}
-                      </Badge>
                     </div>
                   ))}
                 </CardContent>
@@ -697,13 +876,31 @@ export const Itinerary = () => {
             </div>
 
             {/* Main Content Area */}
-            <div className="lg:col-span-3">
+            <div className="xl:col-span-3 order-1 xl:order-2">
               {selectedItinerary && (
                 <Tabs defaultValue="destinations" className="w-full">
-                  <TabsList className="grid w-full grid-cols-3">
-                    <TabsTrigger value="destinations">Destinations</TabsTrigger>
-                    <TabsTrigger value="map">Map View</TabsTrigger>
-                    <TabsTrigger value="emergency">Emergency</TabsTrigger>
+                  <TabsList className="grid w-full grid-cols-3 h-auto">
+                    <TabsTrigger 
+                      value="destinations" 
+                      className="text-xs sm:text-sm px-2 py-2"
+                    >
+                      <span className="hidden sm:inline">Destinations</span>
+                      <span className="sm:hidden">Places</span>
+                    </TabsTrigger>
+                    <TabsTrigger 
+                      value="map" 
+                      className="text-xs sm:text-sm px-2 py-2"
+                    >
+                      <span className="hidden sm:inline">Map View</span>
+                      <span className="sm:hidden">Map</span>
+                    </TabsTrigger>
+                    <TabsTrigger 
+                      value="emergency" 
+                      className="text-xs sm:text-sm px-2 py-2"
+                    >
+                      <span className="hidden sm:inline">Emergency</span>
+                      <span className="sm:hidden">SOS</span>
+                    </TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="destinations">
@@ -738,3 +935,5 @@ export const Itinerary = () => {
     </div>
   );
 };
+
+export default Itinerary;

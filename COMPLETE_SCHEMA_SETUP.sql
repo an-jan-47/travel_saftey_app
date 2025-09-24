@@ -9,17 +9,17 @@ ALTER TABLE app_a857ad95a4_emergency_contacts ENABLE ROW LEVEL SECURITY;
 -- STEP 2: Create RLS policies
 -- Destinations policies
 CREATE POLICY "Users can manage their own destinations" ON app_a857ad95a4_destinations
-FOR ALL USING (auth.uid()::text = user_id OR auth.uid()::text = tourist_id);
+FOR ALL USING (auth.uid() = user_id::uuid OR auth.uid() = tourist_id::uuid);
 
 -- Emergency contacts policies  
 CREATE POLICY "Users can manage their own emergency contacts" ON app_a857ad95a4_emergency_contacts
-FOR ALL USING (auth.uid()::text = user_id OR auth.uid()::text = tourist_id);
+FOR ALL USING (auth.uid() = user_id::uuid OR auth.uid() = tourist_id::uuid);
 
 -- Checkins policies (only if table exists with proper columns)
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'app_a857ad95a4_checkins') THEN
-        EXECUTE 'CREATE POLICY "Users can manage their own checkins" ON app_a857ad95a4_checkins FOR ALL USING (auth.uid()::text = user_id OR auth.uid()::text = tourist_id)';
+        EXECUTE 'CREATE POLICY "Users can manage their own checkins" ON app_a857ad95a4_checkins FOR ALL USING (auth.uid() = user_id::uuid OR auth.uid() = tourist_id::uuid)';
         RAISE NOTICE 'Created RLS policy for checkins table';
     ELSE
         RAISE NOTICE 'Checkins table does not exist - skipping policy';
@@ -32,12 +32,12 @@ RETURNS TRIGGER AS $$
 BEGIN
     -- Set user_id to current authenticated user if not provided
     IF NEW.user_id IS NULL THEN
-        NEW.user_id := auth.uid()::text;
+        NEW.user_id := auth.uid();
     END IF;
     
     -- Set tourist_id to current authenticated user if not provided  
     IF NEW.tourist_id IS NULL THEN
-        NEW.tourist_id := auth.uid()::text;
+        NEW.tourist_id := auth.uid();
     END IF;
     
     RETURN NEW;
