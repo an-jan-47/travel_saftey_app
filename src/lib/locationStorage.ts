@@ -30,6 +30,7 @@ export class LocationStorageManager {
   private config: LocationStorageConfig;
   private lastLocationTime: number = 0;
   private batchUploadTimer: NodeJS.Timeout | null = null;
+  private fallbackToLocalStorage: boolean = false;
 
   constructor(config?: Partial<LocationStorageConfig>) {
     this.config = {
@@ -43,18 +44,77 @@ export class LocationStorageManager {
   }
 
   /**
-   * Initialize the IndexedDB database
+   * Initialize the IndexedDB database with retry mechanism and fallback
+   * This method will never throw errors - it always succeeds with either IndexedDB or localStorage
    */
   async initialize(): Promise<void> {
+    try {
+      // Check if IndexedDB is available
+      if (!('indexedDB' in window)) {
+        console.warn('IndexedDB not supported, falling back to localStorage');
+        this.fallbackToLocalStorage = true;
+        return;
+      }
+
+      // Retry logic for IndexedDB initialization
+      let retries = 3;
+      while (retries > 0) {
+        try {
+          await this.tryInitialize();
+          console.log('IndexedDB initialized successfully');
+          return;
+        } catch (error) {
+          retries--;
+          console.warn(`IndexedDB initialization attempt failed (${3 - retries}/3):`, error);
+          
+          if (retries === 0) {
+            console.warn('All IndexedDB initialization attempts failed, falling back to localStorage');
+            this.fallbackToLocalStorage = true;
+            return;
+          }
+          
+          // Wait before retrying
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    } catch (error) {
+      // Final safety net - should never reach here, but if it does, use localStorage
+      console.warn('Unexpected error during initialization, falling back to localStorage:', error);
+      this.fallbackToLocalStorage = true;
+    }
+  }
+
+  /**
+   * Single attempt to initialize IndexedDB
+   */
+  private async tryInitialize(): Promise<void> {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.dbVersion);
 
-      request.onerror = () => {
-        reject(new Error('Failed to open IndexedDB'));
+      request.onerror = (event) => {
+        const error = (event.target as IDBOpenDBRequest).error;
+        reject(new Error(`IndexedDB open failed: ${error?.message || 'Unknown error'}`));
+      };
+
+      request.onblocked = (event) => {
+        console.warn('IndexedDB blocked - another tab may be using an older version');
+        reject(new Error('IndexedDB blocked by another tab'));
       };
 
       request.onsuccess = (event) => {
         this.db = (event.target as IDBOpenDBRequest).result;
+        
+        // Add error handler for the database connection
+        this.db.onerror = (event) => {
+          console.error('IndexedDB database error:', event);
+        };
+        
+        this.db.onversionchange = (event) => {
+          console.warn('IndexedDB version change detected');
+          this.db?.close();
+          this.db = null;
+        };
+        
         resolve();
       };
 
@@ -210,13 +270,27 @@ export class LocationStorageManager {
    * Add location to IndexedDB store
    */
   private async addLocationToStore(location: StoredLocation): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-      const request = store.add(location);
+    if (this.fallbackToLocalStorage || !this.db) {
+      return this.addLocationToLocalStorage(location);
+    }
 
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
+    return new Promise((resolve, reject) => {
+      try {
+        const transaction = this.db!.transaction([this.storeName], 'readwrite');
+        const store = transaction.objectStore(this.storeName);
+        const request = store.add(location);
+
+        request.onsuccess = () => resolve();
+        request.onerror = () => {
+          console.warn('IndexedDB store failed, falling back to localStorage');
+          this.fallbackToLocalStorage = true;
+          this.addLocationToLocalStorage(location).then(resolve).catch(reject);
+        };
+      } catch (error) {
+        console.warn('IndexedDB transaction failed, falling back to localStorage:', error);
+        this.fallbackToLocalStorage = true;
+        this.addLocationToLocalStorage(location).then(resolve).catch(reject);
+      }
     });
   }
 
@@ -224,18 +298,24 @@ export class LocationStorageManager {
    * Maintain buffer size limits by removing oldest entries
    */
   private async maintainBufferLimits(isOffline: boolean): Promise<void> {
+    if (this.fallbackToLocalStorage || !this.db) {
+      // For localStorage, buffer limits are maintained in addLocationToLocalStorage
+      return;
+    }
+
     const maxLocations = isOffline 
       ? this.config.maxOfflineLocations 
       : this.config.maxOnlineLocations;
 
     return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-      const index = store.index('isOffline');
-      
-      const request = index.getAll(IDBKeyRange.only(isOffline ? 1 : 0));
-      
-      request.onsuccess = () => {
+      try {
+        const transaction = this.db!.transaction([this.storeName], 'readwrite');
+        const store = transaction.objectStore(this.storeName);
+        const index = store.index('isOffline');
+        
+        const request = index.getAll(IDBKeyRange.only(isOffline ? 1 : 0));
+        
+        request.onsuccess = () => {
         const locations = request.result as StoredLocation[];
         
         if (locations.length > maxLocations) {
@@ -262,7 +342,16 @@ export class LocationStorageManager {
         }
       };
       
-      request.onerror = () => reject(request.error);
+      request.onerror = () => {
+        console.warn('IndexedDB maintainBufferLimits failed, switching to localStorage');
+        this.fallbackToLocalStorage = true;
+        resolve(); // Don't reject, just continue with localStorage
+      };
+      } catch (error) {
+        console.warn('IndexedDB maintainBufferLimits error, switching to localStorage:', error);
+        this.fallbackToLocalStorage = true;
+        resolve();
+      }
     });
   }
 
@@ -270,8 +359,16 @@ export class LocationStorageManager {
    * Get all stored locations for batch upload
    */
   async getLocationsForUpload(isOffline: boolean = false): Promise<StoredLocation[]> {
+    if (this.fallbackToLocalStorage) {
+      return this.getLocationsFromLocalStorage(isOffline);
+    }
+
     if (!this.db) {
       await this.initialize();
+    }
+
+    if (this.fallbackToLocalStorage) {
+      return this.getLocationsFromLocalStorage(isOffline);
     }
 
     return new Promise((resolve, reject) => {
@@ -423,5 +520,67 @@ export class LocationStorageManager {
       this.db.close();
       this.db = null;
     }
+  }
+
+  // ========== LocalStorage Fallback Methods ==========
+
+  /**
+   * Get localStorage key for locations
+   */
+  private getLocalStorageKey(isOffline: boolean): string {
+    return `${this.dbName}_locations_${isOffline ? 'offline' : 'online'}`;
+  }
+
+  /**
+   * Get locations from localStorage
+   */
+  private getLocationsFromLocalStorage(isOffline: boolean): StoredLocation[] {
+    try {
+      const key = this.getLocalStorageKey(isOffline);
+      const data = localStorage.getItem(key);
+      return data ? JSON.parse(data) : [];
+    } catch (error) {
+      console.error('Error reading from localStorage:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Save locations to localStorage
+   */
+  private saveLocationsToLocalStorage(locations: StoredLocation[], isOffline: boolean): void {
+    try {
+      const key = this.getLocalStorageKey(isOffline);
+      localStorage.setItem(key, JSON.stringify(locations));
+    } catch (error) {
+      console.error('Error saving to localStorage:', error);
+      // If localStorage is full, remove oldest entries
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        const key = this.getLocalStorageKey(isOffline);
+        const reducedLocations = locations.slice(-Math.floor(locations.length / 2));
+        localStorage.setItem(key, JSON.stringify(reducedLocations));
+      }
+    }
+  }
+
+  /**
+   * Add location using localStorage fallback
+   */
+  private async addLocationToLocalStorage(location: StoredLocation): Promise<void> {
+    const isOffline = location.isOffline === 1;
+    const locations = this.getLocationsFromLocalStorage(isOffline);
+    locations.push(location);
+    
+    // Maintain buffer limits
+    const maxLocations = isOffline 
+      ? this.config.maxOfflineLocations 
+      : this.config.maxOnlineLocations;
+    
+    if (locations.length > maxLocations) {
+      locations.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      locations.splice(0, locations.length - maxLocations);
+    }
+    
+    this.saveLocationsToLocalStorage(locations, isOffline);
   }
 }

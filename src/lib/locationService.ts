@@ -1,8 +1,9 @@
 import { Geolocation, Position, GeolocationOptions } from '@capacitor/geolocation';
 import { Device } from '@capacitor/device';
 import { Network } from '@capacitor/network';
+import { Capacitor } from '@capacitor/core';
 import { LocationData } from './encryption';
-import { LocationStorageManager } from './locationStorage';
+import { ILocationStorage } from './storageInterface';
 
 export interface LocationServiceConfig {
   normalInterval: number; // 30 seconds
@@ -21,7 +22,7 @@ export interface LocationServiceEvents {
 
 export class LocationService {
   private config: LocationServiceConfig;
-  private storageManager: LocationStorageManager;
+  private storageManager: ILocationStorage;
   private trackingInterval: NodeJS.Timeout | null = null;
   private isTracking: boolean = false;
   private touristId: string = '';
@@ -33,23 +34,31 @@ export class LocationService {
 
   constructor(
     touristId: string,
-    storageManager: LocationStorageManager,
+    storageManager: ILocationStorage,
     config?: Partial<LocationServiceConfig>
   ) {
     this.touristId = touristId;
     this.storageManager = storageManager;
+    
+    // Check if running on web platform
+    const isWeb = Capacitor.getPlatform() === 'web';
+    
     this.config = {
       normalInterval: 30 * 1000, // 30 seconds
       lowBatteryInterval: 2 * 60 * 1000, // 2 minutes
-      maxAccuracy: 10, // 10 meters
+      maxAccuracy: isWeb ? 100 : 10, // 100m for web (very lenient), 10m for mobile
       batteryThreshold: 15, // 15%
       highAccuracyOptions: {
         enableHighAccuracy: true,
-        maximumAge: 3000, // 3 seconds
-        timeout: 15000, // 15 seconds timeout
+        maximumAge: 5000, // 5 seconds
+        timeout: 30000, // 30 seconds timeout for web compatibility
       },
       ...config
     };
+
+    console.log(`🔧 LocationService initialized for ${isWeb ? 'WEB' : 'MOBILE'} platform`);
+    console.log(`📏 Max accuracy threshold: ${this.config.maxAccuracy}m`);
+    console.log(`⏱️ Timeout: ${this.config.highAccuracyOptions.timeout}ms`);
 
     this.initializeNetworkListener();
     this.initializeBatteryMonitoring();
@@ -60,26 +69,50 @@ export class LocationService {
    */
   private async initializeNetworkListener(): Promise<void> {
     try {
-      // Get initial network status
-      const status = await Network.getStatus();
-      this.isOnline = status.connected;
-
-      // Listen for network changes
-      Network.addListener('networkStatusChange', (status) => {
-        const wasOnline = this.isOnline;
-        this.isOnline = status.connected;
+      if (this.isWebPlatform()) {
+        // For web, use navigator.onLine and window events
+        this.isOnline = navigator.onLine;
         
-        if (this.eventListeners.networkStatusChange) {
-          this.eventListeners.networkStatusChange(this.isOnline);
-        }
+        const handleOnlineStatus = () => {
+          const wasOnline = this.isOnline;
+          this.isOnline = navigator.onLine;
+          
+          if (this.eventListeners.networkStatusChange) {
+            this.eventListeners.networkStatusChange(this.isOnline);
+          }
 
-        // If coming back online, trigger batch upload
-        if (!wasOnline && this.isOnline) {
-          this.triggerBatchUpload('network_reconnected');
-        }
+          // If coming back online, trigger batch upload
+          if (!wasOnline && this.isOnline) {
+            this.triggerBatchUpload('network_reconnected');
+          }
 
-        console.log(`Network status changed: ${this.isOnline ? 'Online' : 'Offline'}`);
-      });
+          console.log(`Network status changed: ${this.isOnline ? 'Online' : 'Offline'}`);
+        };
+        
+        window.addEventListener('online', handleOnlineStatus);
+        window.addEventListener('offline', handleOnlineStatus);
+      } else {
+        // Get initial network status for mobile
+        const status = await Network.getStatus();
+        this.isOnline = status.connected;
+
+        // Listen for network changes on mobile
+        Network.addListener('networkStatusChange', (status) => {
+          const wasOnline = this.isOnline;
+          this.isOnline = status.connected;
+          
+          if (this.eventListeners.networkStatusChange) {
+            this.eventListeners.networkStatusChange(this.isOnline);
+          }
+
+          // If coming back online, trigger batch upload
+          if (!wasOnline && this.isOnline) {
+            this.triggerBatchUpload('network_reconnected');
+          }
+
+          console.log(`Network status changed: ${this.isOnline ? 'Online' : 'Offline'}`);
+        });
+      }
     } catch (error) {
       console.error('Failed to initialize network listener:', error);
     }
@@ -90,21 +123,43 @@ export class LocationService {
    */
   private async initializeBatteryMonitoring(): Promise<void> {
     try {
-      // Get initial battery info
-      const batteryInfo = await Device.getBatteryInfo();
-      this.batteryLevel = batteryInfo.batteryLevel || 100;
-      this.updateBatteryOptimization();
-
-      // Monitor battery level periodically
-      setInterval(async () => {
-        try {
-          const batteryInfo = await Device.getBatteryInfo();
-          this.batteryLevel = batteryInfo.batteryLevel || 100;
-          this.updateBatteryOptimization();
-        } catch (error) {
-          console.error('Failed to get battery info:', error);
+      if (this.isWebPlatform()) {
+        // For web, use Battery API if available, otherwise assume full battery
+        if ('getBattery' in navigator) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const battery = await (navigator as any).getBattery() as any;
+          this.batteryLevel = Math.round(battery.level * 100);
+          
+          // Listen for battery changes
+          battery.addEventListener('levelchange', () => {
+            this.batteryLevel = Math.round(battery.level * 100);
+            this.updateBatteryOptimization();
+          });
+        } else {
+          // Battery API not available, assume 100%
+          this.batteryLevel = 100;
+          console.log('Battery API not available on web, assuming 100%');
         }
-      }, 60000); // Check every minute
+      } else {
+        // Get initial battery info for mobile
+        const batteryInfo = await Device.getBatteryInfo();
+        // Convert decimal to percentage (0.84 -> 84)
+        this.batteryLevel = Math.round((batteryInfo.batteryLevel || 1) * 100);
+        
+        // Monitor battery level periodically on mobile
+        setInterval(async () => {
+          try {
+            const batteryInfo = await Device.getBatteryInfo();
+            // Convert decimal to percentage (0.84 -> 84)
+            this.batteryLevel = Math.round((batteryInfo.batteryLevel || 1) * 100);
+            this.updateBatteryOptimization();
+          } catch (error) {
+            console.error('Failed to get battery info:', error);
+          }
+        }, 60000); // Check every minute
+      }
+      
+      this.updateBatteryOptimization();
 
     } catch (error) {
       console.error('Failed to initialize battery monitoring:', error);
@@ -134,6 +189,133 @@ export class LocationService {
   }
 
   /**
+   * Check if running on web platform
+   */
+  private isWebPlatform(): boolean {
+    return Capacitor.getPlatform() === 'web';
+  }
+
+  /**
+   * Request location permission with web fallback
+   */
+  private async requestLocationPermission(): Promise<boolean> {
+    if (this.isWebPlatform()) {
+      // For web, we'll check permissions during geolocation request
+      return true;
+    } else {
+      const permissions = await Geolocation.requestPermissions();
+      return permissions.location === 'granted';
+    }
+  }
+
+  /**
+   * Get current position with web fallback
+   */
+  private async getCurrentPositionCompat(): Promise<Position> {
+    if (this.isWebPlatform()) {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('Geolocation is not supported by this browser'));
+          return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            resolve({
+              coords: {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                accuracy: position.coords.accuracy,
+                altitude: position.coords.altitude,
+                altitudeAccuracy: position.coords.altitudeAccuracy,
+                heading: position.coords.heading,
+                speed: position.coords.speed
+              },
+              timestamp: position.timestamp
+            });
+          },
+          (error) => {
+            reject(new Error(`Geolocation error: ${error.message}`));
+          },
+          {
+            enableHighAccuracy: this.config.highAccuracyOptions.enableHighAccuracy,
+            timeout: this.config.highAccuracyOptions.timeout,
+            maximumAge: this.config.highAccuracyOptions.maximumAge
+          }
+        );
+      });
+    } else {
+      return await Geolocation.getCurrentPosition(this.config.highAccuracyOptions);
+    }
+  }
+
+  /**
+   * Watch position with web fallback
+   */
+  private async watchPositionCompat(): Promise<string> {
+    if (this.isWebPlatform()) {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('Geolocation is not supported by this browser'));
+          return;
+        }
+
+        const watchId = navigator.geolocation.watchPosition(
+          (position) => {
+            const capacitorPosition: Position = {
+              coords: {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                accuracy: position.coords.accuracy,
+                altitude: position.coords.altitude,
+                altitudeAccuracy: position.coords.altitudeAccuracy,
+                heading: position.coords.heading,
+                speed: position.coords.speed
+              },
+              timestamp: position.timestamp
+            };
+            this.handleLocationUpdate(capacitorPosition);
+          },
+          (error) => {
+            this.handleLocationError(new Error(`Geolocation error: ${error.message}`));
+          },
+          {
+            enableHighAccuracy: this.config.highAccuracyOptions.enableHighAccuracy,
+            timeout: this.config.highAccuracyOptions.timeout,
+            maximumAge: this.config.highAccuracyOptions.maximumAge
+          }
+        );
+
+        resolve(watchId.toString());
+      });
+    } else {
+      return await Geolocation.watchPosition(
+        this.config.highAccuracyOptions,
+        (position, err) => {
+          if (err) {
+            this.handleLocationError(new Error(err.message));
+            return;
+          }
+          if (position) {
+            this.handleLocationUpdate(position);
+          }
+        }
+      );
+    }
+  }
+
+  /**
+   * Clear watch position with web fallback
+   */
+  private async clearWatchCompat(watchId: string): Promise<void> {
+    if (this.isWebPlatform()) {
+      navigator.geolocation.clearWatch(parseInt(watchId));
+    } else {
+      await Geolocation.clearWatch({ id: watchId });
+    }
+  }
+
+  /**
    * Start location tracking
    */
   async startTracking(): Promise<void> {
@@ -144,27 +326,15 @@ export class LocationService {
 
     try {
       // Request location permissions
-      const permissions = await Geolocation.requestPermissions();
-      if (permissions.location !== 'granted') {
+      const hasPermission = await this.requestLocationPermission();
+      if (!hasPermission) {
         throw new Error('Location permission not granted');
       }
 
       this.isTracking = true;
       
       // Use watch position for more efficient tracking
-      this.watchId = await Geolocation.watchPosition(
-        this.config.highAccuracyOptions,
-        (position, err) => {
-          if (err) {
-            this.handleLocationError(new Error(err.message));
-            return;
-          }
-
-          if (position) {
-            this.handleLocationUpdate(position);
-          }
-        }
-      );
+      this.watchId = await this.watchPositionCompat();
 
       // Set up interval-based tracking as fallback
       const interval = this.isLowBattery 
@@ -197,7 +367,7 @@ export class LocationService {
 
     // Clear watch position
     if (this.watchId) {
-      await Geolocation.clearWatch({ id: this.watchId });
+      await this.clearWatchCompat(this.watchId);
       this.watchId = null;
     }
 
@@ -215,7 +385,7 @@ export class LocationService {
    */
   private async getCurrentLocation(): Promise<void> {
     try {
-      const position = await Geolocation.getCurrentPosition(this.config.highAccuracyOptions);
+      const position = await this.getCurrentPositionCompat();
       await this.handleLocationUpdate(position);
     } catch (error) {
       this.handleLocationError(new Error(`Failed to get location: ${error.message}`));
@@ -234,6 +404,8 @@ export class LocationService {
         console.log(`Location accuracy ${coords.accuracy}m exceeds threshold ${this.config.maxAccuracy}m, skipping`);
         return;
       }
+
+      console.log(`✅ Location acquired: ${coords.latitude.toFixed(6)}, ${coords.longitude.toFixed(6)} (accuracy: ${coords.accuracy}m)`);
 
       // Reverse geocode for address (optional)
       let address: string | undefined;
@@ -256,6 +428,8 @@ export class LocationService {
       const stored = await this.storageManager.storeLocation(locationData, !this.isOnline);
       
       if (stored) {
+        console.log(`📍 Location stored successfully: ${address || 'Unknown address'}`);
+        
         // Trigger location update event
         if (this.eventListeners.locationUpdate) {
           this.eventListeners.locationUpdate(locationData);
@@ -263,6 +437,8 @@ export class LocationService {
 
         // Check if we should trigger batch upload
         await this.checkBatchUploadTriggers();
+      } else {
+        console.warn('⚠️ Failed to store location');
       }
 
     } catch (error) {

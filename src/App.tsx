@@ -10,6 +10,7 @@ import Tracking from './pages/Tracking';
 import SOS from './pages/SOS';
 import NotFound from './pages/NotFound';
 import { authHelpers } from './lib/supabase';
+import { AutoCheckInService } from './lib/autoCheckInService';
 import { User, Session } from '@supabase/supabase-js';
 
 const queryClient = new QueryClient();
@@ -20,35 +21,88 @@ const App = () => {
 
   useEffect(() => {
     // Check initial auth state
-    checkAuthState();
+    const checkAuthStateAsync = async () => {
+      try {
+        const currentUser = await authHelpers.getCurrentUser();
+        setUser(currentUser);
+        
+        // If user is already authenticated, start auto check-in
+        if (currentUser) {
+          initializeAutoCheckIn();
+        }
+      } catch (error) {
+        console.error('Error checking auth state:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    checkAuthStateAsync();
     
     // Listen for auth changes
     const { data: { subscription } } = authHelpers.onAuthStateChange((event, session: Session | null) => {
       if (event === 'SIGNED_IN') {
         setUser(session?.user || null);
+        // Start auto check-in service when user signs in
+        initializeAutoCheckIn();
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
+        // Stop auto check-in service when user signs out
+        stopAutoCheckIn();
       }
     });
 
     return () => {
       subscription?.unsubscribe();
+      // Clean up auto check-in service
+      stopAutoCheckIn();
     };
   }, []);
 
-  const checkAuthState = async () => {
+  const initializeAutoCheckIn = async () => {
     try {
-      const currentUser = await authHelpers.getCurrentUser();
-      setUser(currentUser);
+      const autoCheckInService = AutoCheckInService.getInstance();
+      
+      // Request notification permission
+      const notificationGranted = await autoCheckInService.requestNotificationPermission();
+      
+      if (notificationGranted) {
+        console.log('Notifications enabled for auto check-in');
+      } else {
+        console.log('Notifications not enabled - auto check-in will still work but without notifications');
+      }
+      
+      // Service starts automatically when getInstance is called
+      console.log('Auto check-in service initialized');
     } catch (error) {
-      console.error('Error checking auth state:', error);
-    } finally {
-      setIsLoading(false);
+      console.error('Error initializing auto check-in service:', error);
+    }
+  };
+
+  const stopAutoCheckIn = () => {
+    try {
+      const autoCheckInService = AutoCheckInService.getInstance();
+      autoCheckInService.stop();
+      console.log('Auto check-in service stopped');
+    } catch (error) {
+      console.error('Error stopping auto check-in service:', error);
     }
   };
 
   const handleAuthSuccess = () => {
-    checkAuthState();
+    // Refresh auth state after successful authentication
+    const refreshAuthState = async () => {
+      try {
+        const currentUser = await authHelpers.getCurrentUser();
+        setUser(currentUser);
+        if (currentUser) {
+          initializeAutoCheckIn();
+        }
+      } catch (error) {
+        console.error('Error refreshing auth state:', error);
+      }
+    };
+    refreshAuthState();
   };
 
   if (isLoading) {

@@ -7,7 +7,7 @@ import { AlertTriangle, Phone, Shield, Clock, CheckCircle, X, MapPin } from 'luc
 import { toast } from 'sonner';
 import { authHelpers, dbHelpers, getCurrentLocation, reverseGeocode, Incident, Alert } from '@/lib/supabase';
 import { LocationService } from '@/lib/locationService';
-import { LocationStorageManager } from '@/lib/locationStorage';
+import { SimpleLocationStorageManager } from '@/lib/locationStorageSimple';
 import { BatchUploadService } from '@/lib/batchUpload';
 
 const SOS: React.FC = () => {
@@ -20,7 +20,7 @@ const SOS: React.FC = () => {
   
   // Service references for location flushing
   const locationServiceRef = useRef<LocationService | null>(null);
-  const storageManagerRef = useRef<LocationStorageManager | null>(null);
+  const storageManagerRef = useRef<SimpleLocationStorageManager | null>(null);
   const batchUploadServiceRef = useRef<BatchUploadService | null>(null);
   
   const [emergencyContacts] = useState([
@@ -85,7 +85,7 @@ const SOS: React.FC = () => {
       if (!profile) return;
 
       // Initialize storage manager
-      storageManagerRef.current = new LocationStorageManager();
+      storageManagerRef.current = new SimpleLocationStorageManager();
       await storageManagerRef.current.initialize();
       await storageManagerRef.current.setTouristId(profile.tourist_id);
 

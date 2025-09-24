@@ -1,7 +1,7 @@
 import { Network } from '@capacitor/network';
-import { LocationStorageManager, StoredLocation } from './locationStorage';
+import { ILocationStorage, StoredLocation } from './storageInterface';
 import { decryptLocationBatch, LocationData } from './encryption';
-import { supabase } from './supabase';
+import { supabase, authHelpers } from './supabase';
 
 export interface BatchUploadConfig {
   maxRetries: number;
@@ -26,13 +26,13 @@ export interface RetryState {
 
 export class BatchUploadService {
   private config: BatchUploadConfig;
-  private storageManager: LocationStorageManager;
+  private storageManager: ILocationStorage;
   private isUploading: boolean = false;
   private retryQueue: Map<string, RetryState> = new Map();
   private retryTimer: NodeJS.Timeout | null = null;
 
   constructor(
-    storageManager: LocationStorageManager,
+    storageManager: ILocationStorage,
     config?: Partial<BatchUploadConfig>
   ) {
     this.storageManager = storageManager;
@@ -145,8 +145,15 @@ export class BatchUploadService {
 
       console.log(`Uploading ${storedLocations.length} ${isOffline ? 'offline' : 'online'} locations`);
 
+      // Convert StoredLocation to EncryptedData format for decryption
+      const encryptedDataArray = storedLocations.map(location => ({
+        data: location.encryptedData,
+        iv: location.iv,
+        salt: location.salt
+      }));
+
       // Decrypt locations
-      const decryptedLocations = decryptLocationBatch(storedLocations, touristId);
+      const decryptedLocations = decryptLocationBatch(encryptedDataArray, touristId);
 
       // Process in batches to avoid overwhelming the server
       const batches = this.chunkArray(decryptedLocations, this.config.batchSize);
@@ -203,12 +210,15 @@ export class BatchUploadService {
    */
   private async uploadBatch(locations: LocationData[], batchId: string): Promise<{ success: boolean; error?: string }> {
     try {
+      console.log(`📤 Uploading batch ${batchId} with ${locations.length} locations (user_id will be auto-filled by database)`);
+
       // Prepare location data for database insertion
+      // Note: user_id is omitted - the database trigger will fill it automatically using tourist_id
       const dbLocations = locations.map(location => ({
-        user_id: null, // Will be set by RLS policy
         tourist_id: location.touristId,
         latitude: location.latitude,
         longitude: location.longitude,
+        accuracy: location.accuracy || null, // Include GPS accuracy
         address: location.address || null,
         in_restricted_zone: false, // Will be computed server-side
         timestamp: location.timestamp
@@ -216,7 +226,7 @@ export class BatchUploadService {
 
       // Upload with timeout
       const uploadPromise = supabase
-        .from('location_logs')
+        .from('app_a857ad95a4_location_logs')
         .insert(dbLocations);
 
       const timeoutPromise = new Promise<never>((_, reject) => {
@@ -335,8 +345,15 @@ export class BatchUploadService {
 
     for (const { key, retryState } of retryBatches) {
       try {
+        // Convert StoredLocation to EncryptedData format for decryption
+        const encryptedDataArray = retryState.locations.map(location => ({
+          data: location.encryptedData,
+          iv: location.iv,
+          salt: location.salt
+        }));
+
         // Decrypt and upload retry batch
-        const decryptedLocations = decryptLocationBatch(retryState.locations, touristId);
+        const decryptedLocations = decryptLocationBatch(encryptedDataArray, touristId);
         const result = await this.uploadBatch(decryptedLocations, `retry_${key}`);
 
         if (result.success) {

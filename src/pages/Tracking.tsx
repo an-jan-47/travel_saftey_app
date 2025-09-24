@@ -1,15 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
-import { MapPin, Navigation, AlertTriangle, Shield, Wifi, WifiOff, Play, Pause, Battery, BatteryLow } from 'lucide-react';
+import { MapPin, AlertTriangle, Shield, Wifi, WifiOff, Battery, BatteryLow } from 'lucide-react';
 import { toast } from 'sonner';
-import { authHelpers, dbHelpers, getCurrentLocation, reverseGeocode, isPointInPolygon, calculateDistance, LocationLog, RestrictedZone, Hazard } from '@/lib/supabase';
+import { authHelpers, dbHelpers, getCurrentLocation, reverseGeocode, isPointInPolygon, LocationLog, RestrictedZone, Hazard } from '@/lib/supabase';
 import { LeafletMap, MapMarker } from '@/components/LeafletMap';
 import { LocationService } from '@/lib/locationService';
-import { LocationStorageManager } from '@/lib/locationStorage';
+import { SimpleLocationStorageManager } from '@/lib/locationStorageSimple';
 import { BatchUploadService } from '@/lib/batchUpload';
 
 const Tracking: React.FC = () => {
@@ -27,8 +24,22 @@ const Tracking: React.FC = () => {
   
   // Service references
   const locationServiceRef = useRef<LocationService | null>(null);
-  const storageManagerRef = useRef<LocationStorageManager | null>(null);
+  const storageManagerRef = useRef<SimpleLocationStorageManager | null>(null);
   const batchUploadServiceRef = useRef<BatchUploadService | null>(null);
+  const trackingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // State refs for event handlers
+  const isTrackingRef = useRef(isTracking);
+  const geoFencingRef = useRef(geoFencing);
+  
+  // Update refs when state changes
+  useEffect(() => {
+    isTrackingRef.current = isTracking;
+  }, [isTracking]);
+  
+  useEffect(() => {
+    geoFencingRef.current = geoFencing;
+  }, [geoFencing]);
 
   const loadTrackingData = useCallback(async () => {
     try {
@@ -71,6 +82,7 @@ const Tracking: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const initializeServices = useCallback(async () => {
@@ -82,7 +94,7 @@ const Tracking: React.FC = () => {
       if (!profile) return;
 
       // Initialize storage manager
-      storageManagerRef.current = new LocationStorageManager();
+      storageManagerRef.current = new SimpleLocationStorageManager();
       await storageManagerRef.current.initialize();
       await storageManagerRef.current.setTouristId(profile.tourist_id);
 
@@ -96,13 +108,32 @@ const Tracking: React.FC = () => {
       batchUploadServiceRef.current = new BatchUploadService(storageManagerRef.current);
 
       // Set up event listeners
-      locationServiceRef.current.addEventListener('locationUpdate', (location) => {
+      locationServiceRef.current.addEventListener('locationUpdate', async (location) => {
         setCurrentLocation({
           lat: location.latitude,
           lng: location.longitude,
           address: location.address || ''
         });
-        updateStorageStats();
+        
+        // Check for geo-fencing violations if tracking is active
+        if (isTrackingRef.current && geoFencingRef.current) {
+          await checkGeoFencing({ lat: location.latitude, lng: location.longitude });
+        }
+
+        // Log location to database if tracking is active (for UI display)
+        if (isTrackingRef.current) {
+          await logLocationToDatabase({ lat: location.latitude, lng: location.longitude }, location.address || '');
+        }
+        
+        // Update storage stats
+        if (storageManagerRef.current) {
+          try {
+            const stats = await storageManagerRef.current.getStorageStats();
+            setStorageStats(stats);
+          } catch (error) {
+            console.error('Failed to update storage stats:', error);
+          }
+        }
       });
 
       locationServiceRef.current.addEventListener('locationError', (error) => {
@@ -129,10 +160,18 @@ const Tracking: React.FC = () => {
       // Update storage stats
       updateStorageStats();
 
+      // Start location tracking automatically
+      if (locationServiceRef.current) {
+        await locationServiceRef.current.startTracking();
+        setIsTracking(true);
+        toast.success('Location tracking started automatically');
+      }
+
     } catch (error) {
       console.error('Failed to initialize services:', error);
       toast.error('Failed to initialize location services');
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const updateStorageStats = useCallback(async () => {
@@ -208,7 +247,7 @@ const Tracking: React.FC = () => {
 
       // Log location if tracking is active
       if (isTracking) {
-        await logLocation(location, address);
+        await logLocationToDatabase(location, address);
       }
 
     } catch (error) {
@@ -279,7 +318,7 @@ const Tracking: React.FC = () => {
     }
   };
 
-  const logLocation = async (location: { lat: number; lng: number }, address: string) => {
+  const logLocationToDatabase = async (location: { lat: number; lng: number }, address: string) => {
     try {
       const user = await authHelpers.getCurrentUser();
       if (!user) return;
@@ -308,24 +347,6 @@ const Tracking: React.FC = () => {
       }
     } catch (error) {
       console.error('Error logging location:', error);
-    }
-  };
-
-  const toggleTracking = () => {
-    if (isTracking) {
-      // Stop tracking
-      if (trackingIntervalRef.current) {
-        clearInterval(trackingIntervalRef.current);
-        trackingIntervalRef.current = null;
-      }
-      setIsTracking(false);
-      toast.success('Location tracking stopped');
-    } else {
-      // Start tracking
-      setIsTracking(true);
-      trackingIntervalRef.current = setInterval(updateLocation, 30000); // Update every 30 seconds
-      updateLocation(); // Update immediately
-      toast.success('Location tracking started');
     }
   };
 
@@ -399,53 +420,6 @@ const Tracking: React.FC = () => {
         </div>
       </div>
 
-      {/* Tracking Controls */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Navigation className="w-5 h-5" />
-            Tracking Controls
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between">
-            <div className="space-y-4">
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="tracking"
-                  checked={isTracking}
-                  onCheckedChange={toggleTracking}
-                />
-                <Label htmlFor="tracking">Live Location Tracking</Label>
-              </div>
-              
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="geofencing"
-                  checked={geoFencing}
-                  onCheckedChange={setGeoFencing}
-                />
-                <Label htmlFor="geofencing">Geo-fencing Alerts</Label>
-              </div>
-            </div>
-            
-            <Button onClick={toggleTracking} variant={isTracking ? "destructive" : "default"}>
-              {isTracking ? (
-                <>
-                  <Pause className="w-4 h-4 mr-2" />
-                  Stop Tracking
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 mr-2" />
-                  Start Tracking
-                </>
-              )}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* Map */}
       <Card>
         <CardHeader>
@@ -477,42 +451,6 @@ const Tracking: React.FC = () => {
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Location History */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Location History</CardTitle>
-            <CardDescription>{locationLogs.length} locations tracked</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3 max-h-[400px] overflow-y-auto">
-              {locationLogs.map((log, index) => (
-                <div key={log.id} className="flex items-start gap-3 p-3 border rounded-lg">
-                  <MapPin className={`w-4 h-4 mt-0.5 ${
-                    log.in_restricted_zone ? 'text-red-500' : 'text-green-500'
-                  }`} />
-                  <div className="flex-1">
-                    <p className="font-semibold text-sm">{log.address || 'Unknown location'}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {log.latitude.toFixed(6)}, {log.longitude.toFixed(6)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(log.timestamp).toLocaleString()}
-                    </p>
-                  </div>
-                  {log.in_restricted_zone && (
-                    <Badge variant="destructive" className="text-xs">
-                      Restricted
-                    </Badge>
-                  )}
-                </div>
-              ))}
-              {locationLogs.length === 0 && (
-                <p className="text-muted-foreground text-center py-4">No location history</p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Safety Zones & Hazards */}
         <Card>
           <CardHeader>

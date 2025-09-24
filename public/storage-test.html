@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>localStorage Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        button { margin: 5px; padding: 5px 10px; }
+    </style>
+</head>
+<body>
+    <h1>Travel Safety App - localStorage Test</h1>
+    
+    <div id="test-results"></div>
+    
+    <button onclick="runTests()">Run Storage Tests</button>
+    <button onclick="clearStorage()">Clear All Storage</button>
+    <button onclick="viewStorage()">View Storage Contents</button>
+
+    <script>
+        async function runTests() {
+            const results = document.getElementById('test-results');
+            results.innerHTML = '';
+
+            // Test 1: Basic localStorage availability
+            try {
+                localStorage.setItem('test', 'value');
+                localStorage.removeItem('test');
+                addResult('✅ localStorage Available', true);
+            } catch (error) {
+                addResult('❌ localStorage Not Available: ' + error.message, false);
+                return;
+            }
+
+            // Test 2: Mock location data storage
+            try {
+                const mockLocation = {
+                    id: 'test_' + Date.now(),
+                    timestamp: new Date().toISOString(),
+                    isOffline: 0,
+                    encryptedData: 'mock_encrypted_data',
+                    iv: 'mock_iv',
+                    salt: 'mock_salt'
+                };
+
+                // Store online location
+                const onlineLocations = JSON.parse(localStorage.getItem('travelsafe_locations_online') || '[]');
+                onlineLocations.push(mockLocation);
+                localStorage.setItem('travelsafe_locations_online', JSON.stringify(onlineLocations));
+
+                addResult('✅ Location Data Stored Successfully', true);
+            } catch (error) {
+                addResult('❌ Failed to Store Location Data: ' + error.message, false);
+            }
+
+            // Test 3: Retrieve and verify data
+            try {
+                const storedLocations = JSON.parse(localStorage.getItem('travelsafe_locations_online') || '[]');
+                if (storedLocations.length > 0) {
+                    addResult(`✅ Retrieved ${storedLocations.length} location(s)`, true);
+                } else {
+                    addResult('⚠️ No locations found in storage', false);
+                }
+            } catch (error) {
+                addResult('❌ Failed to Retrieve Location Data: ' + error.message, false);
+            }
+
+            // Test 4: Storage capacity check
+            try {
+                let totalSize = 0;
+                for (let key in localStorage) {
+                    if (localStorage.hasOwnProperty(key)) {
+                        totalSize += localStorage[key].length + key.length;
+                    }
+                }
+                const mbUsed = (totalSize / (1024 * 1024)).toFixed(2);
+                addResult(`✅ Storage Usage: ${mbUsed} MB`, true);
+            } catch (error) {
+                addResult('❌ Failed to Check Storage Usage: ' + error.message, false);
+            }
+
+            // Test 5: Metadata storage
+            try {
+                const metadata = { touristId: 'test_tourist_123' };
+                localStorage.setItem('travelsafe_metadata', JSON.stringify(metadata));
+                const retrieved = JSON.parse(localStorage.getItem('travelsafe_metadata'));
+                if (retrieved.touristId === metadata.touristId) {
+                    addResult('✅ Metadata Storage Works', true);
+                } else {
+                    addResult('❌ Metadata Storage Failed', false);
+                }
+            } catch (error) {
+                addResult('❌ Failed to Test Metadata Storage: ' + error.message, false);
+            }
+        }
+
+        function addResult(message, success) {
+            const results = document.getElementById('test-results');
+            const div = document.createElement('div');
+            div.className = 'test ' + (success ? 'success' : 'error');
+            div.textContent = message;
+            results.appendChild(div);
+        }
+
+        function clearStorage() {
+            const keys = Object.keys(localStorage).filter(key => key.startsWith('travelsafe_'));
+            keys.forEach(key => localStorage.removeItem(key));
+            addResult(`✅ Cleared ${keys.length} storage keys`, true);
+        }
+
+        function viewStorage() {
+            const results = document.getElementById('test-results');
+            results.innerHTML = '<h3>Current Storage Contents:</h3>';
+            
+            const keys = Object.keys(localStorage).filter(key => key.startsWith('travelsafe_'));
+            if (keys.length === 0) {
+                addResult('No TravelSafe data found in storage', true);
+                return;
+            }
+
+            keys.forEach(key => {
+                try {
+                    const data = localStorage.getItem(key);
+                    const parsed = JSON.parse(data);
+                    const size = data.length;
+                    addResult(`${key}: ${Array.isArray(parsed) ? parsed.length + ' items' : 'object'} (${size} bytes)`, true);
+                } catch (error) {
+                    addResult(`${key}: Invalid JSON (${data?.length || 0} bytes)`, false);
+                }
+            });
+        }
+
+        // Auto-run tests on page load
+        window.onload = runTests;
+    </script>
+</body>
+</html>
