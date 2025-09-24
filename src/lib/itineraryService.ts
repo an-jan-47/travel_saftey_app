@@ -75,18 +75,33 @@ export class ItineraryService {
       const touristId = localStorage.getItem('tourist_id');
       if (!touristId) throw new Error('Tourist ID not found');
 
+      // Get the authenticated user's actual UUID for user_id
+      const user = await supabase.auth.getUser();
+      if (!user.data.user) throw new Error('User not authenticated');
+
+      // Build insert object with correct IDs
+      const insertData: Record<string, unknown> = {
+        tourist_id: touristId,           // Custom tourist ID (TEXT)
+        user_id: user.data.user.id,      // Real Supabase auth UUID
+        destinations: data.destinations || [],
+        start_date: data.start_date,
+        end_date: data.end_date,
+        waypoints: data.waypoints || [],
+        auto_checkin_interval: data.auto_checkin_interval || 21600, // 6 hours default
+        status: data.status || 'active',
+        notes: data.notes || ''
+      };
+
+      // Only include title if provided (column may not exist yet)
+      if (data.title) {
+        insertData.title = data.title;
+      } else {
+        insertData.title = `Trip ${new Date(data.start_date || '').toLocaleDateString()}`;
+      }
+
       const { data: result, error } = await supabase
         .from('app_a857ad95a4_itineraries')
-        .insert([{
-          tourist_id: touristId,
-          destinations: data.destinations || [],
-          start_date: data.start_date,
-          end_date: data.end_date,
-          waypoints: data.waypoints || [],
-          auto_checkin_interval: data.auto_checkin_interval || 21600, // 6 hours default
-          status: data.status || 'active',
-          notes: data.notes
-        }])
+        .insert([insertData])
         .select()
         .single();
 
@@ -115,16 +130,28 @@ export class ItineraryService {
 
       const { data: itineraries, error } = await supabase
         .from('app_a857ad95a4_itineraries')
-        .select(`
-          *,
-          destination_details:app_a857ad95a4_destinations(*)
-        `)
+        .select('*')
         .eq('tourist_id', touristId)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      const result = itineraries || [];
+      // Fetch destinations separately to avoid relationship ambiguity issues
+      const itinerariesWithDestinations = await Promise.all(
+        (itineraries || []).map(async (itinerary) => {
+          const { data: destinations } = await supabase
+            .from('app_a857ad95a4_destinations')
+            .select('*')
+            .eq('itinerary_id', itinerary.id);
+            
+          return {
+            ...itinerary,
+            destination_details: destinations || []
+          };
+        })
+      );
+
+      const result = itinerariesWithDestinations;
       
       // Cache the result
       this.setCachedData('list', result);
@@ -147,28 +174,111 @@ export class ItineraryService {
         return cached;
       }
 
-      const { data, error } = await supabase
+      const { data: itinerary, error } = await supabase
         .from('app_a857ad95a4_itineraries')
-        .select(`
-          *,
-          destination_details:app_a857ad95a4_destinations(*),
-          checkins:app_a857ad95a4_checkins(*)
-        `)
+        .select('*')
         .eq('id', itineraryId)
         .single();
 
       if (error) throw error;
 
+      // Fetch destinations and checkins separately
+      const [destinationsResult, checkinsResult] = await Promise.all([
+        supabase
+          .from('app_a857ad95a4_destinations')
+          .select('*')
+          .eq('itinerary_id', itineraryId),
+        supabase
+          .from('app_a857ad95a4_checkins')
+          .select('*')
+          .eq('itinerary_id', itineraryId)
+      ]);
+
+      const result = {
+        ...itinerary,
+        destination_details: destinationsResult.data || [],
+        checkins: checkinsResult.data || []
+      };
+
       // Cache the result
-      this.setCachedData(itineraryId, data);
+      this.setCachedData(itineraryId, result);
       
-      return data;
+      return result;
     } catch (error) {
       console.error('Error fetching itinerary:', error);
       
       // Return cached data if available
       const cached = this.getCachedData(itineraryId);
       return cached;
+    }
+  }
+
+  async updateItinerary(itineraryId: string, data: Partial<ItineraryWithDestinations>): Promise<ItineraryWithDestinations | null> {
+    try {
+      // Build update object with only the fields that should exist
+      const updateData: Record<string, unknown> = {};
+      
+      if (data.start_date !== undefined) updateData.start_date = data.start_date;
+      if (data.end_date !== undefined) updateData.end_date = data.end_date;
+      if (data.notes !== undefined) updateData.notes = data.notes;
+      if (data.status !== undefined) updateData.status = data.status;
+      if (data.destinations !== undefined) updateData.destinations = data.destinations;
+      if (data.waypoints !== undefined) updateData.waypoints = data.waypoints;
+      if (data.auto_checkin_interval !== undefined) updateData.auto_checkin_interval = data.auto_checkin_interval;
+      
+      // Only include title if it's provided (column may not exist yet)
+      if (data.title !== undefined) updateData.title = data.title;
+
+      const { data: result, error } = await supabase
+        .from('app_a857ad95a4_itineraries')
+        .update(updateData)
+        .eq('id', itineraryId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Clear caches
+      localStorage.removeItem(`itinerary_cache_${itineraryId}`);
+      localStorage.removeItem('itinerary_cache_list');
+
+      return { ...result, destination_details: [] };
+    } catch (error) {
+      console.error('Error updating itinerary:', error);
+      return null;
+    }
+  }
+
+  async deleteItinerary(itineraryId: string): Promise<boolean> {
+    try {
+      // Delete related destinations first
+      await supabase
+        .from('app_a857ad95a4_destinations')
+        .delete()
+        .eq('itinerary_id', itineraryId);
+
+      // Delete related checkins
+      await supabase
+        .from('app_a857ad95a4_checkins')
+        .delete()
+        .eq('itinerary_id', itineraryId);
+
+      // Delete the itinerary
+      const { error } = await supabase
+        .from('app_a857ad95a4_itineraries')
+        .delete()
+        .eq('id', itineraryId);
+
+      if (error) throw error;
+
+      // Clear caches
+      localStorage.removeItem(`itinerary_cache_${itineraryId}`);
+      localStorage.removeItem('itinerary_cache_list');
+
+      return true;
+    } catch (error) {
+      console.error('Error deleting itinerary:', error);
+      return false;
     }
   }
 
@@ -280,6 +390,10 @@ export class ItineraryService {
   // Check-in Management
   async performManualCheckIn(destinationId: string, location: LocationCoordinates, notes?: string): Promise<CheckIn | null> {
     try {
+      // Get user ID from Supabase auth
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('User not authenticated');
+      
       const touristId = localStorage.getItem('tourist_id');
       if (!touristId) throw new Error('Tourist ID not found');
 
@@ -303,11 +417,19 @@ export class ItineraryService {
         );
       }
 
+      // Make sure destinationId is a valid UUID before inserting
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(destinationId)) {
+        console.error('Invalid destination_id format:', destinationId);
+        throw new Error('Invalid destination UUID format');
+      }
+      
       const { data: result, error } = await supabase
         .from('app_a857ad95a4_checkins')
         .insert([{
-          destination_id: destinationId,
+          destination_id: destinationId, // Must be a valid UUID
           tourist_id: touristId,
+          user_id: user.id, // Set user_id to authenticated user's UUID
           checkin_type: 'manual',
           status: 'completed',
           latitude: location.lat,
@@ -332,10 +454,19 @@ export class ItineraryService {
 
   async getDestinationCheckIns(destinationId: string): Promise<CheckIn[]> {
     try {
+      // Ensure we're using a valid UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      
+      // Only proceed if the destination ID is a valid UUID format
+      if (!uuidRegex.test(destinationId)) {
+        console.error('Invalid destination_id format for database query:', destinationId);
+        return [];
+      }
+      
       const { data, error } = await supabase
         .from('app_a857ad95a4_checkins')
         .select('*')
-        .eq('destination_id', destinationId)
+        .eq('destination_id', destinationId)  // This must be a valid UUID
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -457,6 +588,17 @@ export class ItineraryService {
   // Auto Check-in Logic
   async checkAutoCheckInStatus(destinationId: string, currentLocation: LocationCoordinates): Promise<CheckInStatus> {
     try {
+      // Ensure we're using a valid UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(destinationId)) {
+        console.error('Invalid destination_id format for database query:', destinationId);
+        return {
+          destination_id: destinationId,
+          is_overdue: false,
+          can_checkin: false
+        };
+      }
+      
       const { data: destination } = await supabase
         .from('app_a857ad95a4_destinations')
         .select('*')
@@ -626,8 +768,15 @@ export class ItineraryService {
 
   // Store data offline when network is unavailable
   storeOfflineCheckIn(destinationId: string, location: LocationCoordinates, notes?: string): void {
+    // Validate UUID format first
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(destinationId)) {
+      console.error('Invalid destination_id format for offline storage:', destinationId);
+      return; // Don't store invalid UUID
+    }
+    
     const checkInData = {
-      destination_id: destinationId,
+      destination_id: destinationId, // Valid UUID format for later database insertion
       latitude: location.lat,
       longitude: location.lng,
       notes,

@@ -1,0 +1,109 @@
+table_schema,table_name,column_name,data_type
+public,app_a857ad95a4_emergency_contacts,updated_at,timestamp with time zone
+public,app_a857ad95a4_tourists,user_id,uuid
+public,app_a857ad95a4_hazards,latitude,numeric
+public,app_a857ad95a4_hazards,longitude,numeric
+public,app_a857ad95a4_hazards,radius_km,numeric
+public,app_a857ad95a4_hazards,is_active,boolean
+public,app_a857ad95a4_hazards,expires_at,timestamp with time zone
+public,app_a857ad95a4_hazards,created_at,timestamp with time zone
+public,app_a857ad95a4_location_logs,id,uuid
+public,app_a857ad95a4_location_logs,user_id,uuid
+public,app_a857ad95a4_location_logs,latitude,numeric
+public,app_a857ad95a4_location_logs,longitude,numeric
+public,app_a857ad95a4_location_logs,in_restricted_zone,boolean
+public,app_a857ad95a4_location_logs,timestamp,timestamp with time zone
+public,app_a857ad95a4_itineraries,id,uuid
+public,app_a857ad95a4_itineraries,user_id,uuid
+public,app_a857ad95a4_itineraries,destinations,jsonb
+public,app_a857ad95a4_itineraries,start_date,date
+public,app_a857ad95a4_itineraries,end_date,date
+public,app_a857ad95a4_itineraries,waypoints,jsonb
+public,app_a857ad95a4_itineraries,auto_checkin_interval,integer
+public,app_a857ad95a4_itineraries,created_at,timestamp with time zone
+public,app_a857ad95a4_itineraries,updated_at,timestamp with time zone
+public,app_a857ad95a4_checkins,id,uuid
+public,app_a857ad95a4_checkins,user_id,uuid
+public,app_a857ad95a4_checkins,itinerary_id,uuid
+public,app_a857ad95a4_checkins,latitude,numeric
+public,app_a857ad95a4_checkins,longitude,numeric
+public,app_a857ad95a4_checkins,created_at,timestamp with time zone
+public,app_a857ad95a4_destinations,id,uuid
+public,app_a857ad95a4_destinations,itinerary_id,uuid
+public,app_a857ad95a4_destinations,user_id,uuid
+public,app_a857ad95a4_destinations,latitude,numeric
+public,app_a857ad95a4_destinations,longitude,numeric
+public,app_a857ad95a4_destinations,planned_arrival,timestamp with time zone
+public,app_a857ad95a4_destinations,auto_checkin_interval,integer
+public,app_a857ad95a4_destinations,order_index,integer
+public,app_a857ad95a4_destinations,created_at,timestamp with time zone
+public,app_a857ad95a4_destinations,updated_at,timestamp with time zone
+public,app_a857ad95a4_emergency_contacts,id,uuid
+public,app_a857ad95a4_emergency_contacts,user_id,uuid
+public,app_a857ad95a4_emergency_contacts,is_primary,boolean
+public,app_a857ad95a4_emergency_contacts,order_index,integer
+public,app_a857ad95a4_emergency_contacts,created_at,timestamp with time zone
+public,app_a857ad95a4_tourists,id,uuid
+public,app_a857ad95a4_tourists,created_at,timestamp with time zone
+public,app_a857ad95a4_tourists,last_known_location,jsonb
+public,app_a857ad95a4_tourists,updated_at,timestamp with time zone
+public,app_a857ad95a4_incidents,id,uuid
+public,app_a857ad95a4_incidents,user_id,uuid
+public,app_a857ad95a4_incidents,latitude,numeric
+public,app_a857ad95a4_incidents,longitude,numeric
+public,app_a857ad95a4_incidents,created_at,timestamp with time zone
+public,app_a857ad95a4_incidents,resolved_at,timestamp with time zone
+public,app_a857ad95a4_alerts,id,uuid
+public,app_a857ad95a4_alerts,user_id,uuid
+public,app_a857ad95a4_alerts,latitude,numeric
+public,app_a857ad95a4_alerts,longitude,numeric
+public,app_a857ad95a4_alerts,is_read,boolean
+public,app_a857ad95a4_alerts,created_at,timestamp with time zone
+public,app_a857ad95a4_restricted_zones,id,uuid
+public,app_a857ad95a4_restricted_zones,coordinates,jsonb
+public,app_a857ad95a4_restricted_zones,is_active,boolean
+public,app_a857ad95a4_restricted_zones,created_at,timestamp with time zone
+public,app_a857ad95a4_hazards,id,uuid
+public,app_a857ad95a4_tourists,tourist_id,text
+public,app_a857ad95a4_tourists,name,text
+public,app_a857ad95a4_tourists,nationality,text
+public,app_a857ad95a4_tourists,doc_type,text
+public,app_a857ad95a4_tourists,doc_id,text
+public,app_a857ad95a4_tourists,emergency_contact,text
+public,app_a857ad95a4_tourists,language,text
+public,app_a857ad95a4_tourists,medical_info,text
+public,app_a857ad95a4_tourists,qr_code_url,text
+public,app_a857ad95a4_tourists,blockchain_hash,text
+public,app_a857ad95a4_checkins,notes,text
+public,app_a857ad95a4_hazards,severity,text
+public,app_a857ad95a4_hazards,message,text
+public,app_a857ad95a4_emergency_contacts,email,text
+public,app_a857ad95a4_destinations,notes,text
+public,app_a857ad95a4_incidents,tourist_id,text
+public,app_a857ad95a4_incidents,incident_id,text
+public,app_a857ad95a4_itineraries,status,text
+public,app_a857ad95a4_destinations,status,text
+public,app_a857ad95a4_incidents,status,text
+public,app_a857ad95a4_incidents,description,text
+public,app_a857ad95a4_emergency_contacts,tourist_id,text
+public,app_a857ad95a4_itineraries,notes,text
+public,app_a857ad95a4_location_logs,tourist_id,text
+public,app_a857ad95a4_destinations,tourist_id,text
+public,app_a857ad95a4_alerts,tourist_id,text
+public,app_a857ad95a4_alerts,type,text
+public,app_a857ad95a4_alerts,message,text
+public,app_a857ad95a4_alerts,severity,text
+public,app_a857ad95a4_destinations,name,text
+public,app_a857ad95a4_location_logs,address,text
+public,app_a857ad95a4_checkins,tourist_id,text
+public,app_a857ad95a4_emergency_contacts,name,text
+public,app_a857ad95a4_location_logs,accuracy,text
+public,app_a857ad95a4_restricted_zones,name,text
+public,app_a857ad95a4_emergency_contacts,relationship,text
+public,app_a857ad95a4_restricted_zones,severity,text
+public,app_a857ad95a4_restricted_zones,description,text
+public,app_a857ad95a4_emergency_contacts,phone,text
+public,app_a857ad95a4_itineraries,tourist_id,text
+public,app_a857ad95a4_checkins,address,text
+public,app_a857ad95a4_hazards,type,text
+public,app_a857ad95a4_checkins,status,text

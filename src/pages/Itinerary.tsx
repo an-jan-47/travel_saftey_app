@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -49,14 +49,14 @@ const EmergencyContactsManager = () => {
 
   const itineraryService = ItineraryService.getInstance();
 
-  useEffect(() => {
-    loadEmergencyContacts();
-  }, []);
-
-  const loadEmergencyContacts = async () => {
+  const loadEmergencyContacts = useCallback(async () => {
     const loadedContacts = await itineraryService.getEmergencyContacts();
     setContacts(loadedContacts);
-  };
+  }, [itineraryService]);
+
+  useEffect(() => {
+    loadEmergencyContacts();
+  }, [loadEmergencyContacts]);
 
   const addContact = async () => {
     if (!newContact.name || !newContact.phone) return;
@@ -163,6 +163,8 @@ const DestinationManager = ({
   onDestinationUpdated: () => void;
 }) => {
   const [isAddingDestination, setIsAddingDestination] = useState(false);
+  const [isEditingDestination, setIsEditingDestination] = useState(false);
+  const [editingDestination, setEditingDestination] = useState<Destination | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PlaceSearchResult[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<PlaceSearchResult | null>(null);
@@ -179,12 +181,28 @@ const DestinationManager = ({
 
   const itineraryService = ItineraryService.getInstance();
 
+  const checkAllDestinationStatuses = useCallback(async () => {
+    if (!currentLocation) return;
+
+    const statuses: { [key: string]: CheckInStatus } = {};
+    
+    for (const destination of itinerary.destination_details) {
+      const status = await itineraryService.checkAutoCheckInStatus(
+        destination.id, 
+        currentLocation
+      );
+      statuses[destination.id] = status;
+    }
+    
+    setCheckInStatuses(statuses);
+  }, [currentLocation, itinerary.destination_details, itineraryService]);
+
   useEffect(() => {
     getCurrentLocation();
     if (itinerary.destination_details) {
       checkAllDestinationStatuses();
     }
-  }, [itinerary.destination_details]);
+  }, [itinerary.destination_details, checkAllDestinationStatuses]);
 
   const getCurrentLocation = () => {
     if (navigator.geolocation) {
@@ -242,22 +260,6 @@ const DestinationManager = ({
     }
   };
 
-  const checkAllDestinationStatuses = async () => {
-    if (!currentLocation) return;
-
-    const statuses: { [key: string]: CheckInStatus } = {};
-    
-    for (const destination of itinerary.destination_details) {
-      const status = await itineraryService.checkAutoCheckInStatus(
-        destination.id, 
-        currentLocation
-      );
-      statuses[destination.id] = status;
-    }
-    
-    setCheckInStatuses(statuses);
-  };
-
   const performCheckIn = async (destinationId: string) => {
     if (!currentLocation) return;
 
@@ -270,6 +272,57 @@ const DestinationManager = ({
     if (result) {
       onDestinationUpdated();
       await checkAllDestinationStatuses();
+    }
+  };
+
+  const editDestination = (destination: Destination) => {
+    setEditingDestination(destination);
+    setNewDestination({
+      name: destination.name,
+      latitude: destination.latitude,
+      longitude: destination.longitude,
+      planned_arrival: new Date(destination.planned_arrival).toISOString().slice(0, 16),
+      auto_checkin_interval: destination.auto_checkin_interval || 21600,
+      notes: destination.notes || ''
+    });
+    setIsEditingDestination(true);
+    setIsAddingDestination(false);
+  };
+
+  const updateDestination = async () => {
+    if (!editingDestination || !newDestination.name || !newDestination.planned_arrival) return;
+
+    const updated = await itineraryService.updateDestination(editingDestination.id, {
+      ...newDestination,
+      planned_arrival: new Date(newDestination.planned_arrival).toISOString()
+    });
+
+    if (updated) {
+      setIsEditingDestination(false);
+      setEditingDestination(null);
+      setNewDestination({
+        name: '',
+        latitude: null,
+        longitude: null,
+        planned_arrival: '',
+        auto_checkin_interval: 21600,
+        notes: ''
+      });
+      setSelectedPlace(null);
+      setSearchQuery('');
+      setSearchResults([]);
+      onDestinationUpdated();
+    }
+  };
+
+  const deleteDestination = async (destination: Destination) => {
+    if (!confirm(`Are you sure you want to delete "${destination.name}"? This will also delete all related check-ins.`)) {
+      return;
+    }
+
+    const deleted = await itineraryService.deleteDestination(destination.id);
+    if (deleted) {
+      onDestinationUpdated();
     }
   };
 
@@ -290,8 +343,8 @@ const DestinationManager = ({
 
   return (
     <div className="space-y-6">
-      {/* Add Destination Button */}
-      {!isAddingDestination ? (
+      {/* Add/Edit Destination Form */}
+      {!isAddingDestination && !isEditingDestination ? (
         <Button 
           onClick={() => setIsAddingDestination(true)}
           className="w-full"
@@ -302,37 +355,39 @@ const DestinationManager = ({
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle>Add New Destination</CardTitle>
+            <CardTitle>{isEditingDestination ? 'Edit Destination' : 'Add New Destination'}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Place Search */}
-            <div className="space-y-2">
-              <Input
-                placeholder="Search for a place..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  searchPlaces(e.target.value);
-                }}
-              />
-              {searchResults.length > 0 && (
-                <div className="border rounded-md max-h-48 overflow-y-auto">
-                  {searchResults.map((result) => (
-                    <div
-                      key={result.place_id}
-                      className="p-2 hover:bg-gray-50 cursor-pointer border-b last:border-b-0"
-                      onClick={() => selectPlace(result)}
-                    >
-                      <div className="font-medium">{result.display_name.split(',')[0]}</div>
-                      <div className="text-sm text-gray-600">{result.display_name}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Place Search - only for new destinations */}
+            {!isEditingDestination && (
+              <div className="space-y-2">
+                <Input
+                  placeholder="Search for a place..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    searchPlaces(e.target.value);
+                  }}
+                />
+                {searchResults.length > 0 && (
+                  <div className="border rounded-md max-h-48 overflow-y-auto">
+                    {searchResults.map((result) => (
+                      <div
+                        key={result.place_id}
+                        className="p-2 hover:bg-gray-50 cursor-pointer border-b last:border-b-0"
+                        onClick={() => selectPlace(result)}
+                      >
+                        <div className="font-medium">{result.display_name.split(',')[0]}</div>
+                        <div className="text-sm text-gray-600">{result.display_name}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Selected Place or Manual Entry */}
-            {selectedPlace ? (
+            {selectedPlace && !isEditingDestination ? (
               <Alert>
                 <MapPin className="h-4 w-4" />
                 <AlertDescription>
@@ -340,55 +395,87 @@ const DestinationManager = ({
                 </AlertDescription>
               </Alert>
             ) : (
-              <Input
-                placeholder="Or enter destination name manually"
-                value={newDestination.name}
-                onChange={(e) => setNewDestination(prev => ({ ...prev, name: e.target.value }))}
-              />
+              <div>
+                <label className="text-sm font-medium mb-2 block">Destination Name</label>
+                <Input
+                  placeholder="Enter destination name"
+                  value={newDestination.name}
+                  onChange={(e) => setNewDestination(prev => ({ ...prev, name: e.target.value }))}
+                />
+              </div>
             )}
 
             {/* Planned Arrival */}
-            <Input
-              type="datetime-local"
-              placeholder="Planned Arrival"
-              value={newDestination.planned_arrival}
-              onChange={(e) => setNewDestination(prev => ({ ...prev, planned_arrival: e.target.value }))}
-            />
+            <div>
+              <label className="text-sm font-medium mb-2 block">Planned Arrival</label>
+              <Input
+                type="datetime-local"
+                value={newDestination.planned_arrival}
+                onChange={(e) => setNewDestination(prev => ({ ...prev, planned_arrival: e.target.value }))}
+              />
+            </div>
 
             {/* Check-in Interval */}
-            <Select
-              value={newDestination.auto_checkin_interval.toString()}
-              onValueChange={(value) => setNewDestination(prev => ({ 
-                ...prev, 
-                auto_checkin_interval: parseInt(value) 
-              }))}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="3600">1 hour</SelectItem>
-                <SelectItem value="7200">2 hours</SelectItem>
-                <SelectItem value="10800">3 hours</SelectItem>
-                <SelectItem value="21600">6 hours</SelectItem>
-                <SelectItem value="43200">12 hours</SelectItem>
-                <SelectItem value="86400">24 hours</SelectItem>
-              </SelectContent>
-            </Select>
+            <div>
+              <label className="text-sm font-medium mb-2 block">Auto Check-in Interval</label>
+              <Select
+                value={newDestination.auto_checkin_interval.toString()}
+                onValueChange={(value) => setNewDestination(prev => ({ 
+                  ...prev, 
+                  auto_checkin_interval: parseInt(value) 
+                }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="3600">1 hour</SelectItem>
+                  <SelectItem value="7200">2 hours</SelectItem>
+                  <SelectItem value="10800">3 hours</SelectItem>
+                  <SelectItem value="21600">6 hours</SelectItem>
+                  <SelectItem value="43200">12 hours</SelectItem>
+                  <SelectItem value="86400">24 hours</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
             {/* Notes */}
-            <Textarea
-              placeholder="Notes (optional)"
-              value={newDestination.notes}
-              onChange={(e) => setNewDestination(prev => ({ ...prev, notes: e.target.value }))}
-            />
+            <div>
+              <label className="text-sm font-medium mb-2 block">Notes (Optional)</label>
+              <Textarea
+                placeholder="Additional notes about this destination..."
+                value={newDestination.notes}
+                onChange={(e) => setNewDestination(prev => ({ ...prev, notes: e.target.value }))}
+                rows={3}
+              />
+            </div>
 
             {/* Action Buttons */}
             <div className="flex gap-2">
-              <Button onClick={addDestination}>Add Destination</Button>
+              <Button 
+                onClick={isEditingDestination ? updateDestination : addDestination}
+                disabled={!newDestination.name || !newDestination.planned_arrival}
+              >
+                {isEditingDestination ? 'Update Destination' : 'Add Destination'}
+              </Button>
               <Button 
                 variant="outline" 
-                onClick={() => setIsAddingDestination(false)}
+                onClick={() => {
+                  setIsAddingDestination(false);
+                  setIsEditingDestination(false);
+                  setEditingDestination(null);
+                  setNewDestination({
+                    name: '',
+                    latitude: null,
+                    longitude: null,
+                    planned_arrival: '',
+                    auto_checkin_interval: 21600,
+                    notes: ''
+                  });
+                  setSelectedPlace(null);
+                  setSearchQuery('');
+                  setSearchResults([]);
+                }}
               >
                 Cancel
               </Button>
@@ -490,11 +577,21 @@ const DestinationManager = ({
                         Check In
                       </Button>
                     )}
-                    <Button variant="outline" size="sm">
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={() => editDestination(destination)}
+                      className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                    >
                       <Edit className="h-4 w-4 mr-2" />
                       Edit
                     </Button>
-                    <Button variant="outline" size="sm" className="text-red-600">
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => deleteDestination(destination)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                    >
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -512,6 +609,8 @@ const Itinerary = () => {
   const [selectedItinerary, setSelectedItinerary] = useState<ItineraryWithDestinations | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isCreatingItinerary, setIsCreatingItinerary] = useState(false);
+  const [isEditingItinerary, setIsEditingItinerary] = useState(false);
+  const [editingItinerary, setEditingItinerary] = useState<ItineraryWithDestinations | null>(null);
   const [newItinerary, setNewItinerary] = useState({
     start_date: '',
     end_date: '',
@@ -525,6 +624,18 @@ const Itinerary = () => {
 
   const itineraryService = ItineraryService.getInstance();
 
+  // Load itineraries function with useCallback to prevent re-renders
+  const loadItineraries = useCallback(async () => {
+    const loadedItineraries = await itineraryService.getItineraries();
+    setItineraries(loadedItineraries);
+    
+    // Select first itinerary if none selected
+    if (!selectedItinerary && loadedItineraries.length > 0) {
+      setSelectedItinerary(loadedItineraries[0]);
+    }
+  }, [itineraryService, selectedItinerary]);
+
+  // Initial load and event listeners setup
   useEffect(() => {
     loadItineraries();
 
@@ -535,37 +646,45 @@ const Itinerary = () => {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Sync offline data when coming back online
-    if (isOnline) {
-      itineraryService.syncOfflineData();
-    }
-
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [isOnline]);
+  }, [loadItineraries]);
 
-  const loadItineraries = async () => {
-    const loadedItineraries = await itineraryService.getItineraries();
-    setItineraries(loadedItineraries);
-    
-    // Select first itinerary if none selected
-    if (!selectedItinerary && loadedItineraries.length > 0) {
-      setSelectedItinerary(loadedItineraries[0]);
+  // Separate effect to handle online status changes
+  useEffect(() => {
+    if (isOnline) {
+      itineraryService.syncOfflineData();
     }
-  };
+  }, [isOnline, itineraryService]);
 
   const createItinerary = async () => {
     if (!newItinerary.start_date || !newItinerary.end_date) return;
 
+    // Convert destinations array to string format for database
+    const destinationNames = newItinerary.destinations.map(d => d.name);
+
     const created = await itineraryService.createItinerary({
       ...newItinerary,
-      destinations: newItinerary.destinations,
+      destinations: destinationNames,
       status: 'active'
     });
 
     if (created) {
+      // Add destinations separately after creating itinerary
+      for (const dest of newItinerary.destinations) {
+        await itineraryService.addDestination(created.id, {
+          name: dest.name,
+          address: dest.address,
+          latitude: dest.latitude,
+          longitude: dest.longitude,
+          planned_arrival: dest.planned_arrival,
+          auto_checkin_interval: dest.auto_checkin_interval,
+          notes: dest.notes
+        });
+      }
+
       await loadItineraries();
       setIsCreatingItinerary(false);
       setNewItinerary({ 
@@ -605,14 +724,16 @@ const Itinerary = () => {
     const newDestination: Destination = {
       id: `temp_${Date.now()}`,
       itinerary_id: '',
+      user_id: '',
       tourist_id: localStorage.getItem('tourist_id') || '',
-      name: place.name,
-      address: place.address,
-      latitude: place.latitude,
-      longitude: place.longitude,
-      visit_date: new Date().toISOString().split('T')[0],
-      visit_time: '09:00',
-      status: 'pending',
+      name: place.display_name.split(',')[0], // Use first part of display_name as name
+      address: place.display_name,
+      latitude: parseFloat(place.lat),
+      longitude: parseFloat(place.lon),
+      planned_arrival: new Date().toISOString(),
+      auto_checkin_interval: 21600,
+      status: 'upcoming',
+      order_index: 0,
       notes: '',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
@@ -640,6 +761,67 @@ const Itinerary = () => {
       if (updated) {
         setSelectedItinerary(updated);
         await loadItineraries();
+      }
+    }
+  };
+
+  const editItinerary = (itinerary: ItineraryWithDestinations) => {
+    setEditingItinerary(itinerary);
+    setNewItinerary({
+      start_date: itinerary.start_date,
+      end_date: itinerary.end_date,
+      notes: itinerary.notes || '',
+      title: itinerary.title || '',
+      destinations: itinerary.destination_details || []
+    });
+    setIsEditingItinerary(true);
+  };
+
+  const updateItinerary = async () => {
+    if (!editingItinerary || !newItinerary.start_date || !newItinerary.end_date) return;
+
+    // Convert destinations array to string format for database
+    const destinationNames = newItinerary.destinations.map(d => d.name);
+
+    const updated = await itineraryService.updateItinerary(editingItinerary.id, {
+      ...newItinerary,
+      destinations: destinationNames,
+      status: editingItinerary.status
+    });
+
+    if (updated) {
+      await loadItineraries();
+      setIsEditingItinerary(false);
+      setEditingItinerary(null);
+      setNewItinerary({ 
+        start_date: '', 
+        end_date: '', 
+        notes: '', 
+        title: '', 
+        destinations: [] 
+      });
+      setSearchQuery('');
+      setSearchResults([]);
+      
+      // Update selected itinerary if it was the one being edited
+      if (selectedItinerary?.id === editingItinerary.id) {
+        setSelectedItinerary(updated);
+      }
+    }
+  };
+
+  const deleteItinerary = async (itinerary: ItineraryWithDestinations) => {
+    if (!confirm(`Are you sure you want to delete "${itinerary.title || 'this trip'}"? This will also delete all destinations and check-ins.`)) {
+      return;
+    }
+
+    const deleted = await itineraryService.deleteItinerary(itinerary.id);
+    if (deleted) {
+      await loadItineraries();
+      
+      // Clear selected itinerary if it was deleted
+      if (selectedItinerary?.id === itinerary.id) {
+        setSelectedItinerary(itineraries.length > 1 ? itineraries.find(i => i.id !== itinerary.id) || null : null);
       }
     }
   };
@@ -739,8 +921,8 @@ const Itinerary = () => {
                         onClick={() => addDestinationToNewItinerary(place)}
                         className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-200 dark:border-gray-600 last:border-b-0"
                       >
-                        <div className="font-medium text-sm">{place.name}</div>
-                        <div className="text-xs text-gray-500 mt-1">{place.address}</div>
+                        <div className="font-medium text-sm">{place.display_name.split(',')[0]}</div>
+                        <div className="text-xs text-gray-500 mt-1">{place.display_name}</div>
                       </button>
                     ))}
                   </div>
@@ -815,6 +997,148 @@ const Itinerary = () => {
           </Card>
         )}
 
+        {/* Edit Itinerary Dialog */}
+        {isEditingItinerary && editingItinerary && (
+          <Card className="mb-8">
+            <CardHeader>
+              <CardTitle>Edit Itinerary</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Title Field */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Itinerary Title</label>
+                <Input
+                  placeholder="e.g., Tokyo Adventure, Europe Tour..."
+                  value={newItinerary.title}
+                  onChange={(e) => setNewItinerary(prev => ({ ...prev, title: e.target.value }))}
+                />
+              </div>
+
+              {/* Date Fields */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Start Date</label>
+                  <Input
+                    type="date"
+                    value={newItinerary.start_date}
+                    onChange={(e) => setNewItinerary(prev => ({ ...prev, start_date: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-2 block">End Date</label>
+                  <Input
+                    type="date"
+                    value={newItinerary.end_date}
+                    onChange={(e) => setNewItinerary(prev => ({ ...prev, end_date: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              {/* Destination Search */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Add More Destinations (Optional)</label>
+                <div className="relative">
+                  <Input
+                    placeholder="Search for places to visit..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      searchDestinations(e.target.value);
+                    }}
+                  />
+                  {isSearching && (
+                    <div className="absolute right-3 top-3">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Search Results */}
+                {searchResults.length > 0 && (
+                  <div className="mt-2 border rounded-lg max-h-48 overflow-y-auto bg-white dark:bg-gray-800">
+                    {searchResults.map((place, index) => (
+                      <button
+                        key={index}
+                        onClick={() => addDestinationToNewItinerary(place)}
+                        className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-200 dark:border-gray-600 last:border-b-0"
+                      >
+                        <div className="font-medium text-sm">{place.display_name.split(',')[0]}</div>
+                        <div className="text-xs text-gray-500 mt-1">{place.display_name}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Added Destinations List */}
+              {newItinerary.destinations.length > 0 && (
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Added Destinations</label>
+                  <div className="space-y-2">
+                    {newItinerary.destinations.map((destination) => (
+                      <div key={destination.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                        <div className="flex-1">
+                          <div className="font-medium text-sm">{destination.name}</div>
+                          <div className="text-xs text-gray-500 mt-1">{destination.address}</div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeDestinationFromNewItinerary(destination.id)}
+                          className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Notes Field */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Notes</label>
+                <Textarea
+                  placeholder="Trip notes, preferences, important information..."
+                  value={newItinerary.notes}
+                  onChange={(e) => setNewItinerary(prev => ({ ...prev, notes: e.target.value }))}
+                  rows={3}
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-col-reverse sm:flex-row gap-3 pt-4">
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setIsEditingItinerary(false);
+                    setEditingItinerary(null);
+                    setNewItinerary({ 
+                      start_date: '', 
+                      end_date: '', 
+                      notes: '', 
+                      title: '', 
+                      destinations: [] 
+                    });
+                    setSearchQuery('');
+                    setSearchResults([]);
+                  }}
+                  className="w-full sm:w-auto"
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  onClick={updateItinerary}
+                  disabled={!newItinerary.start_date || !newItinerary.end_date}
+                  className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700"
+                >
+                  Update Itinerary
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Main Content */}
         {itineraries.length === 0 ? (
           <Card>
@@ -845,14 +1169,16 @@ const Itinerary = () => {
                   {itineraries.map((itinerary) => (
                     <div
                       key={itinerary.id}
-                      className={`p-3 rounded-lg border cursor-pointer transition-all duration-200 ${
+                      className={`p-3 rounded-lg border transition-all duration-200 ${
                         selectedItinerary?.id === itinerary.id 
                           ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-sm' 
                           : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:hover:border-gray-600 dark:hover:bg-gray-800'
                       }`}
-                      onClick={() => setSelectedItinerary(itinerary)}
                     >
-                      <div className="space-y-2">
+                      <div 
+                        className="space-y-2 cursor-pointer"
+                        onClick={() => setSelectedItinerary(itinerary)}
+                      >
                         <div className="font-medium text-sm md:text-base line-clamp-1">
                           {itinerary.title || `Trip ${new Date(itinerary.start_date).toLocaleDateString()}`}
                         </div>
@@ -868,6 +1194,34 @@ const Itinerary = () => {
                             {itinerary.status}
                           </Badge>
                         </div>
+                      </div>
+                      
+                      {/* Edit/Delete Actions */}
+                      <div className="flex gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            editItinerary(itinerary);
+                          }}
+                          className="flex-1 text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                        >
+                          <Edit className="h-4 w-4 mr-1" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteItinerary(itinerary);
+                          }}
+                          className="flex-1 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        >
+                          <Trash2 className="h-4 w-4 mr-1" />
+                          Delete
+                        </Button>
                       </div>
                     </div>
                   ))}

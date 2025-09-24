@@ -21,11 +21,12 @@ const App = () => {
 
   // Helper function to fetch and store tourist profile
   const storeUserProfile = async (userId: string) => {
+    console.log('storeUserProfile function called with userId:', userId);
     try {
       const { data: profile, error } = await dbHelpers.getTouristProfile(userId);
       if (profile && !error) {
         localStorage.setItem('tourist_id', profile.tourist_id);
-        console.log('Tourist ID stored:', profile.tourist_id);
+        console.log('Tourist ID stored successfully:', profile.tourist_id);
       } else {
         console.error('Failed to fetch tourist profile:', error);
       }
@@ -70,8 +71,13 @@ const App = () => {
         
         // If user is already authenticated, store profile and start auto check-in
         if (currentUser) {
-          await storeUserProfile(currentUser.id);
-          initializeAutoCheckIn();
+          console.log('Current user found, storing profile for:', currentUser.id);
+          try {
+            await storeUserProfile(currentUser.id);
+            initializeAutoCheckIn();
+          } catch (error) {
+            console.error('Error storing initial user profile:', error);
+          }
         }
       } catch (error) {
         console.error('Error checking auth state:', error);
@@ -83,14 +89,19 @@ const App = () => {
     checkAuthStateAsync();
     
     // Listen for auth changes
-    const { data: { subscription } } = authHelpers.onAuthStateChange((event, session: Session | null) => {
+    const { data: { subscription } } = authHelpers.onAuthStateChange(async (event, session: Session | null) => {
+      console.log('Auth state change event:', event, 'User ID:', session?.user?.id);
       if (event === 'SIGNED_IN') {
         setUser(session?.user || null);
         // Store user profile and start auto check-in service when user signs in
         if (session?.user) {
-          storeUserProfile(session.user.id).then(() => {
+          console.log('About to call storeUserProfile for user:', session.user.id);
+          try {
+            await storeUserProfile(session.user.id);
             initializeAutoCheckIn();
-          });
+          } catch (error) {
+            console.error('Error in auth change handler:', error);
+          }
         }
       } else if (event === 'SIGNED_OUT') {
         setUser(null);

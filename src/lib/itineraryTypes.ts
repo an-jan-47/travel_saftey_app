@@ -6,6 +6,7 @@ export interface Destination {
   user_id: string;
   tourist_id: string;
   name: string;
+  address?: string;
   latitude?: number;
   longitude?: number;
   planned_arrival: string; // ISO timestamp
@@ -53,6 +54,7 @@ export interface ItineraryWithDestinations {
   id: string;
   user_id: string;
   tourist_id: string;
+  title?: string;
   destinations: string[];
   start_date: string;
   end_date: string;
@@ -63,6 +65,7 @@ export interface ItineraryWithDestinations {
   created_at: string;
   updated_at: string;
   destination_details: Destination[];
+  checkins?: CheckIn[];
 }
 
 export interface LocationCoordinates {
@@ -73,6 +76,8 @@ export interface LocationCoordinates {
 export interface PlaceSearchResult {
   place_id: string;
   display_name: string;
+  name?: string;
+  address?: string;
   lat: string;
   lon: string;
   type: string;
